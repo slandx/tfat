@@ -174,7 +174,7 @@ func getCode() {
 		fmt.Printf("%06d (expires in %ds) \r", pwd, secondsRemaining)
 		if lastCode != pwd {
 			lastCode = pwd
-			clipboard.WriteAll(string(pwd))
+			clipboard.WriteAll(fmt.Sprint(pwd))
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -202,21 +202,6 @@ func main() {
 			Action: func(c *cli.Context) error {
 				if len(c.Args()) < 2 {
 					log.Fatal("Invalid arguments, see 'go help add'")
-				}
-				item := c.Args().First()
-				secret := c.Args()[1]
-				addOrModifyItem(item, secret)
-				return nil
-			},
-		},
-		{
-			Name:      "modify",
-			Aliases:   []string{"m"},
-			UsageText: "tfat modify <NAME> <KEY>",
-			Usage:     "Modify an item's key",
-			Action: func(c *cli.Context) error {
-				if len(c.Args()) < 2 {
-					log.Fatal("Invalid arguments, see 'go help modify'")
 				}
 				item := c.Args().First()
 				secret := c.Args()[1]
