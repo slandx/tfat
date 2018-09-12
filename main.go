@@ -74,7 +74,7 @@ func readConfig() (Config, error) {
 		}
 		return result, nil
 	} else {
-		os.MkdirAll(path.Dir(configPath), os.ModeDir)
+		os.MkdirAll(path.Dir(configPath), os.ModePerm)
 	}
 	return Config{}, errors.New("read config file error")
 }
@@ -90,7 +90,7 @@ func saveConfig(config *Config) {
 		log.Fatal("encrypt failed:", err)
 	}
 	outStr := config.Secret + fmt.Sprintf("%X", result)
-	err = ioutil.WriteFile(configPath, []byte(outStr), 0666)
+	err = ioutil.WriteFile(configPath, []byte(outStr), 0600)
 	if err != nil {
 		log.Fatal("save config file failed:", err)
 	}
@@ -171,7 +171,7 @@ func getCode() {
 			log.Fatal("Get code ERROR:", err)
 		}
 		secondsRemaining := 30 - (time.Now().Unix() % 30)
-		fmt.Printf("%06d (expires in %ds) \r", pwd, secondsRemaining)
+		fmt.Printf("\r%06d (expires in %ds) ", pwd, secondsRemaining)
 		if lastCode != pwd {
 			lastCode = pwd
 			clipboard.WriteAll(fmt.Sprint(pwd))
