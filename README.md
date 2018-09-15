@@ -1,8 +1,9 @@
 # tfat
 Two factor authentication(2FA) command line tool
 
-## support
+## features
 - save config file with AES encrypt
+- save by password
 - multi items
 - auto refresh code per seconds
 - copy to clipboard if there is a new code

@@ -8,13 +8,13 @@ import (
 
 	"bufio"
 	"bytes"
+	"crypto/md5"
 	"encoding/gob"
 	"encoding/hex"
 	"errors"
 	"github.com/atotto/clipboard"
 	"github.com/urfave/cli"
 	"io/ioutil"
-	"math/rand"
 	"os/user"
 	"path"
 	"sort"
@@ -23,15 +23,14 @@ import (
 )
 
 type Config struct {
-	Secret string
-	Items  map[string]string
+	Key      string
+	HashKey  string
+	HashSalt string
+	Items    map[string]string
 }
-
-const letterBytes = "1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 var (
 	configPath = ""
-	secretLen  = 16
 )
 
 func init() {
@@ -42,13 +41,17 @@ func init() {
 	configPath = path.Join(usr.HomeDir, ".tfat/tfat.conf")
 }
 
-func randomString(n int) string {
-	rand.Seed(time.Now().UnixNano())
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letterBytes[rand.Intn(len(letterBytes))]
+func checkResult(err error, errMsg string) {
+	if err != nil {
+		log.Fatal(errMsg, err)
 	}
-	return string(b)
+}
+
+func getUserInput(prompt string) string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s: ", prompt)
+	text, _ := reader.ReadString('\n')
+	return strings.TrimSpace(text)
 }
 
 func readConfig() (Config, error) {
@@ -58,14 +61,18 @@ func readConfig() (Config, error) {
 		if err != nil {
 			return Config{}, errors.New("read config file error")
 		}
-		binContent, err := hex.DecodeString(string(confBytes[secretLen:]))
-		if err != nil {
-			log.Fatal("hex decode error:", err)
+		saltStr := string(confBytes[:PwSaltLength])
+		keyStr := string(confBytes[PwSaltLength : PwSaltLength+PwLength])
+		plainStr := getUserInput("Input Password")
+		if !verifyPassword(plainStr, saltStr, keyStr) {
+			log.Fatal("Invalid password")
 		}
-		origData, err := AesDecrypt(binContent, confBytes[:secretLen])
-		if err != nil {
-			log.Fatal("decrypt failed:", err)
-		}
+		contentByte, err := hex.DecodeString(string(confBytes[PwSaltLength+PwLength:]))
+		checkResult(err, "decode content failed:")
+		md5Key := md5.Sum([]byte(plainStr))
+		origData, err := AesDecrypt(contentByte, md5Key[:])
+		checkResult(err, "decrypt failed:")
+
 		buf.Write(origData)
 		dec := gob.NewDecoder(&buf)
 		var result Config
@@ -85,15 +92,12 @@ func saveConfig(config *Config) {
 	if err := enc.Encode(config); err != nil {
 		log.Fatal("encode error:", err)
 	}
-	result, err := AesEncrypt(buf.Bytes(), []byte(config.Secret))
-	if err != nil {
-		log.Fatal("encrypt failed:", err)
-	}
-	outStr := config.Secret + fmt.Sprintf("%X", result)
+	md5Key := md5.Sum([]byte(config.Key))
+	result, err := AesEncrypt(buf.Bytes(), md5Key[:])
+	checkResult(err, "encrypt failed: ")
+	outStr := config.HashSalt + config.HashKey + fmt.Sprintf("%X", result)
 	err = ioutil.WriteFile(configPath, []byte(outStr), 0600)
-	if err != nil {
-		log.Fatal("save config file failed:", err)
-	}
+	checkResult(err, "save config file failed:")
 }
 
 func addOrModifyItem(name, secret string) error {
@@ -103,7 +107,11 @@ func addOrModifyItem(name, secret string) error {
 
 	config, err := readConfig()
 	if err != nil {
-		config.Secret = randomString(16)
+		config.Key = ""
+		for len(config.Key) == 0 {
+			config.Key = getUserInput("Input password")
+		}
+		config.HashKey, config.HashSalt = hashPassword(config.Key)
 		config.Items = make(map[string]string)
 	}
 	config.Items[name] = strings.ToUpper(strings.TrimSpace(secret))
@@ -116,9 +124,8 @@ func addOrModifyItem(name, secret string) error {
 
 func listItem() {
 	config, err := readConfig()
-	if err != nil {
-		log.Fatal("Read config failed", err)
-	}
+	checkResult(err, "Read config failed")
+
 	idx := 1
 	for k := range config.Items {
 		fmt.Printf("%d. %s\n", idx, k)
@@ -128,20 +135,30 @@ func listItem() {
 
 func deleteItem(name string) {
 	config, err := readConfig()
-	if err != nil {
-		log.Fatal("Read config failed", err)
-	}
+	checkResult(err, "Read config failed")
+
 	delete(config.Items, name)
 	saveConfig(&config)
 
 	fmt.Println("Delete success!")
 }
 
+func changePassword(plainPwd string) {
+	config, err := readConfig()
+	checkResult(err, "Read config failed")
+
+	config.Key = plainPwd
+	config.HashKey, config.HashSalt = hashPassword(config.Key)
+
+	saveConfig(&config)
+
+	fmt.Println("Change success!")
+}
+
 func getCode() {
 	config, err := readConfig()
-	if err != nil {
-		log.Fatal("Read config failed, run 'tfat help' for help", err)
-	}
+	checkResult(err, "Read config failed, run 'tfat help' for help")
+
 	var names []string
 	idx := 1
 	for k := range config.Items {
@@ -152,10 +169,7 @@ func getCode() {
 	if len(names) <= 0 {
 		log.Fatal("There is no item in config, run 'tfat help' for help")
 	} else if len(names) > 1 {
-		reader := bufio.NewReader(os.Stdin)
-		fmt.Print("Enter index: ")
-		text, _ := reader.ReadString('\n')
-		idx, err = strconv.Atoi(strings.TrimSpace(text))
+		idx, err = strconv.Atoi(getUserInput("Enter index"))
 		if err != nil || idx < 1 || idx > len(names) {
 			log.Fatal("Invalid input", err)
 		}
@@ -167,14 +181,13 @@ func getCode() {
 	var lastCode uint32 = 0
 	for true {
 		pwd, err := OneTimePassword(keyStr)
-		if err != nil {
-			log.Fatal("Get code ERROR:", err)
-		}
+		checkResult(err, "Get code ERROR: ")
+
 		secondsRemaining := 30 - (time.Now().Unix() % 30)
 		fmt.Printf("\r%06d (expires in %ds) ", pwd, secondsRemaining)
 		if lastCode != pwd {
 			lastCode = pwd
-			clipboard.WriteAll(fmt.Sprint(pwd))
+			clipboard.WriteAll(fmt.Sprintf("%06d", pwd))
 		}
 		time.Sleep(1 * time.Second)
 	}
@@ -211,7 +224,6 @@ func main() {
 		},
 		{
 			Name:      "delete",
-			Aliases:   []string{"d"},
 			UsageText: "tfat delete <NAME>",
 			Usage:     "Delete an item",
 			Action: func(c *cli.Context) error {
@@ -219,6 +231,17 @@ func main() {
 					log.Fatal("Invalid arguments, see 'go help delete'")
 				}
 				deleteItem(c.Args().First())
+				return nil
+			},
+		}, {
+			Name:      "password",
+			UsageText: "tfat password <PASSWORD>",
+			Usage:     "Change password",
+			Action: func(c *cli.Context) error {
+				if len(c.Args()) < 1 {
+					log.Fatal("Invalid arguments, see 'go help password'")
+				}
+				changePassword(c.Args().First())
 				return nil
 			},
 		},
