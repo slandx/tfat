@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"syscall"
 	"time"
 
 	"bufio"
@@ -12,14 +13,16 @@ import (
 	"encoding/gob"
 	"encoding/hex"
 	"errors"
-	"github.com/atotto/clipboard"
-	"github.com/urfave/cli"
 	"io/ioutil"
 	"os/user"
 	"path"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/atotto/clipboard"
+	"github.com/urfave/cli"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 type Config struct {
@@ -47,9 +50,14 @@ func checkResult(err error, errMsg string) {
 	}
 }
 
-func getUserInput(prompt string) string {
+func getUserInput(prompt string, isPassword bool) string {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("%s: ", prompt)
+	if isPassword {
+		bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
+		fmt.Println()
+		return string(bytePassword)
+	}
 	text, _ := reader.ReadString('\n')
 	return strings.TrimSpace(text)
 }
@@ -63,7 +71,7 @@ func readConfig() (Config, error) {
 		}
 		saltStr := string(confBytes[:PwSaltLength])
 		keyStr := string(confBytes[PwSaltLength : PwSaltLength+PwLength])
-		plainStr := getUserInput("Input Password")
+		plainStr := getUserInput("Input password", true)
 		if !verifyPassword(plainStr, saltStr, keyStr) {
 			log.Fatal("Invalid password")
 		}
@@ -109,7 +117,7 @@ func addOrModifyItem(name, secret string) error {
 	if err != nil {
 		config.Key = ""
 		for len(config.Key) == 0 {
-			config.Key = getUserInput("Input password")
+			config.Key = getUserInput("Input password", true)
 		}
 		config.HashKey, config.HashSalt = hashPassword(config.Key)
 		config.Items = make(map[string]string)
@@ -169,7 +177,7 @@ func getCode() {
 	if len(names) <= 0 {
 		log.Fatal("There is no item in config, run 'tfat help' for help")
 	} else if len(names) > 1 {
-		idx, err = strconv.Atoi(getUserInput("Enter index"))
+		idx, err = strconv.Atoi(getUserInput("Enter index", false))
 		if err != nil || idx < 1 || idx > len(names) {
 			log.Fatal("Invalid input", err)
 		}
