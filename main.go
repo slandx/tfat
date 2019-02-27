@@ -2,197 +2,108 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
-	"syscall"
 	"time"
 
-	"bufio"
-	"bytes"
-	"crypto/md5"
-	"encoding/gob"
-	"encoding/hex"
-	"errors"
-	"io/ioutil"
-	"os/user"
-	"path"
 	"sort"
-	"strconv"
 	"strings"
 
+	"encoding/base32"
 	"github.com/atotto/clipboard"
+	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	"golang.org/x/crypto/ssh/terminal"
+	"strconv"
 )
 
-type Config struct {
-	Key      string
-	HashKey  string
-	HashSalt string
-	Items    map[string]string
-}
-
-var (
-	configPath = ""
-)
-
-func init() {
-	usr, err := user.Current()
-	if err != nil {
-		log.Fatal(err)
-	}
-	configPath = path.Join(usr.HomeDir, ".tfat/tfat.conf")
-}
+var errNoAccountFound = errors.New("no account exists")
+var errInvalidOption = errors.New("invalid option, check 'tfat help'")
+var errInvalidBase32 = errors.New("the key is not a valid base32 encoding")
 
 func checkResult(err error, errMsg string) {
 	if err != nil {
-		log.Fatal(errMsg, err)
+		fmt.Println(errMsg + ": " + err.Error())
+		os.Exit(1)
 	}
 }
 
-func getUserInput(prompt string, isPassword bool) string {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("%s: ", prompt)
-	if isPassword {
-		bytePassword, _ := terminal.ReadPassword(int(syscall.Stdin))
-		fmt.Println()
-		return string(bytePassword)
-	}
-	text, _ := reader.ReadString('\n')
-	return strings.TrimSpace(text)
-}
-
-func readConfig() (Config, error) {
-	if _, err := os.Stat(configPath); err == nil {
-		var buf bytes.Buffer
-		confBytes, err := ioutil.ReadFile(configPath)
-		if err != nil {
-			return Config{}, errors.New("read config file error")
-		}
-		saltStr := string(confBytes[:PwSaltLength])
-		keyStr := string(confBytes[PwSaltLength : PwSaltLength+PwLength])
-		plainStr := getUserInput("Input password", true)
-		if !verifyPassword(plainStr, saltStr, keyStr) {
-			log.Fatal("Invalid password")
-		}
-		contentByte, err := hex.DecodeString(string(confBytes[PwSaltLength+PwLength:]))
-		checkResult(err, "decode content failed:")
-		md5Key := md5.Sum([]byte(plainStr))
-		origData, err := AesDecrypt(contentByte, md5Key[:])
-		checkResult(err, "decrypt failed:")
-
-		buf.Write(origData)
-		dec := gob.NewDecoder(&buf)
-		var result Config
-		if err := dec.Decode(&result); err != nil {
-			log.Fatal("decode error:", err)
-		}
-		return result, nil
-	} else {
-		os.MkdirAll(path.Dir(configPath), os.ModePerm)
-	}
-	return Config{}, errors.New("read config file error")
-}
-
-func saveConfig(config *Config) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(config); err != nil {
-		log.Fatal("encode error:", err)
-	}
-	md5Key := md5.Sum([]byte(config.Key))
-	result, err := AesEncrypt(buf.Bytes(), md5Key[:])
-	checkResult(err, "encrypt failed: ")
-	outStr := config.HashSalt + config.HashKey + fmt.Sprintf("%X", result)
-	err = ioutil.WriteFile(configPath, []byte(outStr), 0600)
-	checkResult(err, "save config file failed:")
-}
-
-func addOrModifyItem(name, secret string) error {
+func addOrModifyAccount(name, secret string) error {
 	if len(name) == 0 || len(secret) == 0 {
-		log.Fatal("Invalid arguments")
+		checkResult(errInvalidOption, "Error")
+	}
+
+	if _, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret); err != nil {
+		checkResult(errInvalidBase32, "Error")
 	}
 
 	config, err := readConfig()
-	if err != nil {
-		config.Key = ""
-		for len(config.Key) == 0 {
-			config.Key = getUserInput("Input password", true)
-		}
-		config.HashKey, config.HashSalt = hashPassword(config.Key)
-		config.Items = make(map[string]string)
+	checkResult(err, "Open data failed")
+	if config.IsNew {
+		err = initPassword(&config)
+		checkResult(err, "Failed to add account")
 	}
-	config.Items[name] = strings.ToUpper(strings.TrimSpace(secret))
+	config.Accounts[name] = strings.ToUpper(secret)
 
 	saveConfig(&config)
 
-	fmt.Println("Add success!")
+	fmt.Printf("Add %s successfully!\n", name)
 	return nil
 }
 
-func listItem() {
+func deleteAccount(name string) {
 	config, err := readConfig()
-	checkResult(err, "Read config failed")
-
-	idx := 1
-	for k := range config.Items {
-		fmt.Printf("%d. %s\n", idx, k)
-		idx++
+	checkResult(err, "Open data failed")
+	if _, ok := config.Accounts[name]; ok {
+		delete(config.Accounts, name)
+		err = saveConfig(&config)
+		checkResult(err, "Failed to delete account")
+		fmt.Println("Delete success!")
+	} else {
+		fmt.Printf("Account %s is not found", name)
 	}
 }
 
-func deleteItem(name string) {
+func changePassword() {
 	config, err := readConfig()
-	checkResult(err, "Read config failed")
-
-	delete(config.Items, name)
+	checkResult(err, "Open data failed")
+	err = initPassword(&config)
+	checkResult(err, "Failed to change password")
 	saveConfig(&config)
-
-	fmt.Println("Delete success!")
-}
-
-func changePassword(plainPwd string) {
-	config, err := readConfig()
-	checkResult(err, "Read config failed")
-
-	config.Key = plainPwd
-	config.HashKey, config.HashSalt = hashPassword(config.Key)
-
-	saveConfig(&config)
-
-	fmt.Println("Change success!")
+	fmt.Println("Change password successfully!")
 }
 
 func getCode() {
 	config, err := readConfig()
-	checkResult(err, "Read config failed, run 'tfat help' for help")
+	checkResult(err, "Open data failed")
 
 	var names []string
 	idx := 1
-	for k := range config.Items {
+	for k := range config.Accounts {
 		names = append(names, k)
 		fmt.Printf("%d. %s\n", idx, k)
 		idx++
 	}
 	if len(names) <= 0 {
-		log.Fatal("There is no item in config, run 'tfat help' for help")
+		checkResult(errNoAccountFound, "Failed to get code")
 	} else if len(names) > 1 {
-		idx, err = strconv.Atoi(getUserInput("Enter index", false))
-		if err != nil || idx < 1 || idx > len(names) {
-			log.Fatal("Invalid input", err)
+		for true {
+			idx, err = strconv.Atoi(getUserInput("select", false))
+			if err == nil && idx >= 1 && idx <= len(names) {
+				break
+			}
+			fmt.Printf("Number should be in 1..%d\n", len(names))
 		}
 	} else {
 		idx = 1
 	}
-	keyStr := config.Items[names[idx-1]]
+	keyStr := config.Accounts[names[idx-1]]
 
 	var lastCode uint32 = 0
 	for true {
 		pwd, err := OneTimePassword(keyStr)
-		checkResult(err, "Get code ERROR: ")
+		checkResult(err, "Failed to get code")
 
 		secondsRemaining := 30 - (time.Now().Unix() % 30)
-		fmt.Printf("\r%06d (expires in %ds) ", pwd, secondsRemaining)
+		fmt.Printf("\r%06d (remain %ds) ", pwd, secondsRemaining)
 		if lastCode != pwd {
 			lastCode = pwd
 			clipboard.WriteAll(fmt.Sprintf("%06d", pwd))
@@ -208,37 +119,28 @@ func main() {
 	app.Version = "0.0.1"
 	app.Commands = []cli.Command{
 		{
-			Name:      "list",
-			UsageText: "tfat list",
-			Usage:     "List all items",
-			Action: func(c *cli.Context) error {
-				listItem()
-				return nil
-			},
-		},
-		{
 			Name:      "add",
 			UsageText: "tfat add <NAME> <KEY>",
-			Usage:     "Add a new item",
+			Usage:     "Add a new account",
 			Action: func(c *cli.Context) error {
 				if len(c.Args()) < 2 {
-					log.Fatal("Invalid arguments, see 'go help add'")
+					checkResult(errInvalidOption, "Error")
 				}
-				item := c.Args().First()
+				account := c.Args().First()
 				secret := c.Args()[1]
-				addOrModifyItem(item, secret)
+				addOrModifyAccount(account, secret)
 				return nil
 			},
 		},
 		{
 			Name:      "delete",
 			UsageText: "tfat delete <NAME>",
-			Usage:     "Delete an item",
+			Usage:     "Delete an account",
 			Action: func(c *cli.Context) error {
 				if len(c.Args()) < 1 {
-					log.Fatal("Invalid arguments, see 'go help delete'")
+					checkResult(errInvalidOption, "Error")
 				}
-				deleteItem(c.Args().First())
+				deleteAccount(c.Args().First())
 				return nil
 			},
 		}, {
@@ -246,10 +148,7 @@ func main() {
 			UsageText: "tfat password <PASSWORD>",
 			Usage:     "Change password",
 			Action: func(c *cli.Context) error {
-				if len(c.Args()) < 1 {
-					log.Fatal("Invalid arguments, see 'go help password'")
-				}
-				changePassword(c.Args().First())
+				changePassword()
 				return nil
 			},
 		},
@@ -273,6 +172,6 @@ func main() {
 
 	err := app.Run(os.Args)
 	if err != nil {
-		log.Fatal(err)
+		checkResult(err, "Error")
 	}
 }

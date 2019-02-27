@@ -6,7 +6,6 @@ import (
 	"encoding/base32"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -25,16 +24,8 @@ func toUint32(bytes []byte) uint32 {
 		(uint32(bytes[2]) << 8) + uint32(bytes[3])
 }
 
-func padBase32(padStr string) string {
-	var missingPadding = len(padStr) % 8
-	if missingPadding != 0 {
-		padStr = padStr + strings.Repeat("=", 8-missingPadding)
-	}
-	return padStr
-}
-
 func OneTimePassword(keyStr string) (uint32, error) {
-	byteSecret, err := base32.StdEncoding.DecodeString(padBase32(keyStr))
+	byteSecret, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(keyStr)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
