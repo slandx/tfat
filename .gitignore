@@ -21,3 +21,4 @@
 *.zip
 /*.lock
 tfat
+go.sum
