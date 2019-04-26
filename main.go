@@ -9,15 +9,18 @@ import (
 	"strings"
 
 	"encoding/base32"
+	"strconv"
+
 	"github.com/atotto/clipboard"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	"strconv"
 )
 
 var errNoAccountFound = errors.New("no account exists")
 var errInvalidOption = errors.New("invalid option, check 'tfat help'")
 var errInvalidBase32 = errors.New("the key is not a valid base32 encoding")
+
+var runInLoop bool
 
 func checkResult(err error, errMsg string) {
 	if err != nil {
@@ -97,7 +100,7 @@ func getCode() {
 	}
 	keyStr := config.Accounts[names[idx-1]]
 
-	var lastCode uint32 = 0
+	var lastCode uint32
 	for true {
 		pwd, err := OneTimePassword(keyStr)
 		checkResult(err, "Failed to get code")
@@ -108,6 +111,10 @@ func getCode() {
 			lastCode = pwd
 			clipboard.WriteAll(fmt.Sprintf("%06d", pwd))
 		}
+		if !runInLoop {
+			fmt.Println("")
+			break
+		}
 		time.Sleep(1 * time.Second)
 	}
 }
@@ -117,6 +124,13 @@ func main() {
 	app.Name = "Two Factor Authentication(2FA) Tool"
 	app.Usage = "Help to generate 2FA code"
 	app.Version = "0.0.1"
+	app.Flags = []cli.Flag{
+		cli.BoolFlag{
+			Name:        "loop, l",
+			Usage:       "generate code in loop",
+			Destination: &runInLoop,
+		},
+	}
 	app.Commands = []cli.Command{
 		{
 			Name:      "add",

@@ -8,8 +8,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"golang.org/x/crypto/ssh/terminal"
 	"io"
 	"io/ioutil"
 	"log"
@@ -18,15 +16,21 @@ import (
 	"path"
 	"strings"
 	"syscall"
+
+	"github.com/BurntSushi/toml"
+	"golang.org/x/crypto/ssh/terminal"
 )
 
 const (
-	UserPwd           = 1
+	// UserPwd 用户指定密码
+	UserPwd = 1
+	// DefaultPwd 自动生成密码
 	DefaultPwd        = 2
 	aesKeySize uint32 = 32
 	nonceSize         = 12
 )
 
+// Config 配置类结构体
 type Config struct {
 	IsNew    bool
 	Pwd      []byte
@@ -88,10 +92,9 @@ func readConfig() (Config, error) {
 			return Config{}, errInvalidDataFile
 		}
 		return result, nil
-	} else {
-		os.MkdirAll(path.Dir(configPath), os.ModePerm)
-		return Config{IsNew: true}, nil
 	}
+	os.MkdirAll(path.Dir(configPath), os.ModePerm)
+	return Config{IsNew: true}, nil
 }
 
 func saveConfig(config *Config) error {
@@ -166,7 +169,7 @@ func initPassword(cfg *Config) error {
 			}
 			return nil
 		}
-		retryTimes -= 1
+		retryTimes--
 		fmt.Println("Different password, try again!")
 	}
 	return errWrongPassword

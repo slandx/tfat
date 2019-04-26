@@ -24,6 +24,7 @@ func toUint32(bytes []byte) uint32 {
 		(uint32(bytes[2]) << 8) + uint32(bytes[3])
 }
 
+// OneTimePassword Generate one-time password
 func OneTimePassword(keyStr string) (uint32, error) {
 	byteSecret, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(keyStr)
 	if err != nil {
